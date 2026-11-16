@@ -1,0 +1,36 @@
+# PostgreSQL + PostGIS untuk IF4040 Project III.
+# Semua anggota memakai image yang sama -> dump bisa di-restore tanpa beda versi.
+#   docker compose up -d          # nyalakan DB
+#   docker compose down           # matikan (data tetap di volume pgdata)
+#   docker compose down -v        # matikan + HAPUS data
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    platform: linux/amd64          # image resmi hanya amd64; Mac M1/M2 jalan via emulasi
+    container_name: pdl-postgis
+    environment:
+      POSTGRES_DB: pdl
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"                # 5433 di host supaya tidak bentrok dg Postgres lokal
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pdl"]
+      interval: 5s
+      retries: 10
+
+  # ogr2ogr tanpa perlu install GDAL di laptop. Dipakai oleh scripts/import_raw.sh
+  gdal:
+    image: ghcr.io/osgeo/gdal:ubuntu-small-3.10.3
+    profiles: ["tools"]
+    volumes:
+      - ./data/raw:/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
