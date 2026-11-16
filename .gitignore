@@ -1,0 +1,11 @@
+# Natural Earth mentah (zip/shapefile hasil download) - tidak di-commit
+data/raw/
+
+# QGIS
+*.qgs~
+*.qgz~
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/

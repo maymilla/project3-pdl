@@ -1,0 +1,8 @@
+* text=auto
+*.sh  text eol=lf
+*.sql text eol=lf
+*.dump binary
+*.zip  binary
+*.shp  binary
+*.dbf  binary
+*.shx  binary
