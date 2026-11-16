@@ -1,28 +1,17 @@
--- =====================================================================
--- IF4040 Project III - Basis Data Spasial
--- 01_schema.sql  (Orang 1: model relasional + DDL)
 -- Scope: Asia | SRID penyimpanan: EPSG:4326
--- CATATAN: nama kolom sumber (raw.*) diambil dari Natural Earth 1:10m
---          setelah di-import dengan ogr2ogr (huruf kecil). CEK ULANG
---          dengan \d raw.<tabel> sebelum menjalankan bagian 3.
--- =====================================================================
 
 CREATE EXTENSION IF NOT EXISTS postgis;
-CREATE SCHEMA IF NOT EXISTS raw;   -- tempat data mentah hasil import
-
--- ---------------------------------------------------------------------
--- 1. DROP (supaya script bisa dijalankan ulang)
--- ---------------------------------------------------------------------
+CREATE SCHEMA IF NOT EXISTS raw;   
 DROP TABLE IF EXISTS airports, cities, rivers, lakes, provinces, countries CASCADE;
 
 -- ---------------------------------------------------------------------
--- 2. DDL - tabel final (kontrak skema bersama)
+-- DDL - tabel final (kontrak skema bersama)
 -- ---------------------------------------------------------------------
 
--- Negara (region) - kunci penghubung deskriptif: country_code = ADM0_A3
+-- Negara (region) 
 CREATE TABLE countries (
     country_id    SERIAL PRIMARY KEY,
-    country_code  CHAR(3)      NOT NULL UNIQUE,   -- ADM0_A3 (selalu terisi, beda dg ISO_A3 yg kadang -99)
+    country_code  CHAR(3)      NOT NULL UNIQUE,   -- ADM0_A3 
     iso_a3        VARCHAR(3),                     -- boleh NULL jika sumber = '-99'
     name          VARCHAR(100) NOT NULL,
     continent     VARCHAR(50)  NOT NULL,
@@ -31,7 +20,7 @@ CREATE TABLE countries (
     geom          geometry(MultiPolygon, 4326) NOT NULL
 );
 
--- Provinsi / admin-1 (region). Multi karena banyak provinsi berupa kepulauan.
+-- Provinsi / admin-1 (region)
 CREATE TABLE provinces (
     province_id   SERIAL PRIMARY KEY,
     name          VARCHAR(150) NOT NULL,
@@ -40,7 +29,7 @@ CREATE TABLE provinces (
     geom          geometry(MultiPolygon, 4326) NOT NULL
 );
 
--- Kota (point) - Orang 2 yang mengisi data
+-- Kota (point) 
 CREATE TABLE cities (
     city_id       SERIAL PRIMARY KEY,
     name          VARCHAR(150) NOT NULL,
@@ -49,7 +38,7 @@ CREATE TABLE cities (
     geom          geometry(Point, 4326) NOT NULL
 );
 
--- Bandara (point) - Orang 2. Sumber tidak punya kode negara -> relasi via spasial.
+-- Bandara (point)
 CREATE TABLE airports (
     airport_id    SERIAL PRIMARY KEY,
     name          VARCHAR(150) NOT NULL,
@@ -57,15 +46,14 @@ CREATE TABLE airports (
     geom          geometry(Point, 4326) NOT NULL
 );
 
--- Sungai (polyline) - Orang 3. Satu sungai bisa melewati banyak negara -> tanpa FK.
-CREATE TABLE rivers (
+-- Sungai (polyline) 
     river_id      SERIAL PRIMARY KEY,
     name          VARCHAR(150),
     scalerank     SMALLINT,
     geom          geometry(MultiLineString, 4326) NOT NULL
 );
 
--- Danau (region) - Orang 4
+-- Danau (region) 
 CREATE TABLE lakes (
     lake_id       SERIAL PRIMARY KEY,
     name          VARCHAR(150),
@@ -84,11 +72,10 @@ CREATE INDEX idx_provinces_cc   ON provinces (country_code);
 CREATE INDEX idx_cities_cc      ON cities    (country_code);
 
 -- ---------------------------------------------------------------------
--- 3. LOAD + CLEANSING dari raw -> final (bagian Orang 1)
---    Jalankan setelah import shapefile ke schema raw (lihat data/LOAD.md)
+-- LOAD + CLEANSING dari raw -> final
 -- ---------------------------------------------------------------------
 
--- 3a. Countries: filter Asia, -99 -> NULL, paksa MultiPolygon, perbaiki geometri invalid
+-- 3a. Countries: filter Asia
 INSERT INTO countries (country_code, iso_a3, name, continent, subregion, pop_est, geom)
 SELECT adm0_a3,
        NULLIF(iso_a3, '-99'),
@@ -99,11 +86,8 @@ SELECT adm0_a3,
        ST_Multi(ST_CollectionExtract(ST_MakeValid(geom), 3))
 FROM raw.ne_10m_admin_0_countries
 WHERE continent = 'Asia';
--- KEPUTUSAN KELOMPOK: Rusia di Natural Earth berlabel continent = 'Europe'.
--- Jika ingin ikut, ganti WHERE di atas menjadi:
---   WHERE continent = 'Asia' OR adm0_a3 = 'RUS'
 
--- 3b. Provinces: hanya provinsi dari negara yang sudah masuk countries
+-- 3b. Provinces
 INSERT INTO provinces (name, country_code, admin_type, geom)
 SELECT p.name,
        p.adm0_a3,
