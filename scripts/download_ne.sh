@@ -11,6 +11,7 @@ declare -A CAT=(
   [ne_10m_airports]=cultural
   [ne_10m_rivers_lake_centerlines]=physical
   [ne_10m_lakes]=physical
+  [ne_10m_ocean]=physical
 )
 layers=("$@"); [ ${#layers[@]} -eq 0 ] && layers=("${!CAT[@]}")
 
