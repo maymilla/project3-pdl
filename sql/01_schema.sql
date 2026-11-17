@@ -2,7 +2,7 @@
 
 CREATE EXTENSION IF NOT EXISTS postgis;
 CREATE SCHEMA IF NOT EXISTS raw;   
-DROP TABLE IF EXISTS airports, cities, rivers, lakes, provinces, countries CASCADE;
+DROP TABLE IF EXISTS airports, cities, rivers, lakes, provinces, countries, oceans CASCADE;
 
 -- ---------------------------------------------------------------------
 -- DDL - tabel final (kontrak skema bersama)
@@ -62,6 +62,12 @@ CREATE TABLE lakes (
     geom          geometry(MultiPolygon, 4326) NOT NULL
 );
 
+CREATE TABLE oceans(
+    ocean_id    SERIAL PRIMARY KEY,
+    scalerank   SMALLINT,
+    geom        geometry(MultiPolygon, 4326) NOT NULL
+);
+
 -- Indeks spasial (GiST) + indeks FK
 CREATE INDEX idx_countries_geom ON countries USING GIST (geom);
 CREATE INDEX idx_provinces_geom ON provinces USING GIST (geom);
@@ -71,6 +77,7 @@ CREATE INDEX idx_rivers_geom    ON rivers    USING GIST (geom);
 CREATE INDEX idx_lakes_geom     ON lakes     USING GIST (geom);
 CREATE INDEX idx_provinces_cc   ON provinces (country_code);
 CREATE INDEX idx_cities_cc      ON cities    (country_code);
+CREATE INDEX idx_oceans_geom ON oceans USING GIST (geom);
 
 -- ---------------------------------------------------------------------
 -- LOAD + CLEANSING dari raw -> final
@@ -151,6 +158,28 @@ WHERE NOT ST_IsEmpty(g.geom)
       WHERE ST_Intersects(c.geom, g.geom)
   );
 
+-- oceans
+INSERT INTO oceans (scalerank, geom)
+WITH asia AS (
+    SELECT ST_UnaryUnion(ST_Collect(geom)) AS geom
+    FROM countries
+),
+area AS (
+    SELECT ST_Buffer(geom::geography, 200000)::geometry AS geom
+    FROM asia
+),
+clipped AS (
+    SELECT o.scalerank::SMALLINT AS scalerank,
+           ST_CollectionExtract(
+               ST_MakeValid(ST_Intersection(o.geom, area.geom)), 3
+           ) AS geom
+    FROM raw.ne_10m_ocean o
+    CROSS JOIN area
+)
+SELECT scalerank, ST_Multi(geom)
+FROM clipped
+WHERE NOT ST_IsEmpty(geom);
+
 -- 3g. Validasi
 SELECT 'countries' AS tabel, COUNT(*) AS n, SUM((NOT ST_IsValid(geom))::int) AS invalid FROM countries
 UNION ALL
@@ -162,4 +191,6 @@ SELECT 'airports', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM airports
 UNION ALL
 SELECT 'rivers', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM rivers
 UNION ALL
-SELECT 'lakes', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM lakes;
+SELECT 'lakes', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM lakes
+UNION ALL
+SELECT 'oceans', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM oceans;
