@@ -47,6 +47,7 @@ CREATE TABLE airports (
 );
 
 -- Sungai (polyline) 
+CREATE TABLE rivers (
     river_id      SERIAL PRIMARY KEY,
     name          VARCHAR(150),
     scalerank     SMALLINT,
@@ -97,7 +98,68 @@ FROM raw.ne_10m_admin_1_states_provinces p
 JOIN countries c ON c.country_code = p.adm0_a3
 WHERE p.name IS NOT NULL;
 
--- 3c. Validasi
+-- 3c. Cities: hanya kota yang terhubung ke negara Asia
+INSERT INTO cities (name, country_code, population, geom)
+SELECT p.name,
+       p.adm0_a3,
+       CASE WHEN p.pop_max >= 0 THEN p.pop_max::BIGINT END,
+       p.geom
+FROM raw.ne_10m_populated_places p
+JOIN countries c ON c.country_code = p.adm0_a3
+WHERE p.name IS NOT NULL;
+
+-- 3d. Airports: bandara yang berada di dalam atau pada batas negara Asia
+INSERT INTO airports (name, iata_code, geom)
+SELECT a.name, a.iata_code, a.geom
+FROM raw.ne_10m_airports a
+WHERE a.name IS NOT NULL
+  AND EXISTS (
+      SELECT 1
+      FROM countries c
+      WHERE ST_Covers(c.geom, a.geom)
+  );
+
+-- 3e. Rivers: segmen yang beririsan dengan negara Asia
+INSERT INTO rivers (name, scalerank, geom)
+SELECT r.name,
+       r.scalerank::SMALLINT,
+       g.geom
+FROM raw.ne_10m_rivers_lake_centerlines r
+CROSS JOIN LATERAL (
+    SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(r.geom), 2)) AS geom
+) g
+WHERE NOT ST_IsEmpty(g.geom)
+  AND EXISTS (
+      SELECT 1
+      FROM countries c
+      WHERE ST_Intersects(c.geom, g.geom)
+  );
+
+-- 3f. Lakes: danau yang beririsan dengan negara Asia
+INSERT INTO lakes (name, scalerank, geom)
+SELECT l.name,
+       l.scalerank::SMALLINT,
+       g.geom
+FROM raw.ne_10m_lakes l
+CROSS JOIN LATERAL (
+    SELECT ST_Multi(ST_CollectionExtract(ST_MakeValid(l.geom), 3)) AS geom
+) g
+WHERE NOT ST_IsEmpty(g.geom)
+  AND EXISTS (
+      SELECT 1
+      FROM countries c
+      WHERE ST_Intersects(c.geom, g.geom)
+  );
+
+-- 3g. Validasi
 SELECT 'countries' AS tabel, COUNT(*) AS n, SUM((NOT ST_IsValid(geom))::int) AS invalid FROM countries
 UNION ALL
-SELECT 'provinces', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM provinces;
+SELECT 'provinces', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM provinces
+UNION ALL
+SELECT 'cities', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM cities
+UNION ALL
+SELECT 'airports', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM airports
+UNION ALL
+SELECT 'rivers', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM rivers
+UNION ALL
+SELECT 'lakes', COUNT(*), SUM((NOT ST_IsValid(geom))::int) FROM lakes;

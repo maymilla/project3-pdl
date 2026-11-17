@@ -22,10 +22,24 @@ Opsi ogr2ogr yang dipakai: `-lco GEOMETRY_NAME=geom`, `-t_srs EPSG:4326`,
 docker compose exec db psql -U postgres -d pdl -f /sql/01_schema.sql
 ```
 
-## 3. Alternatif: restore dari dump
+Skrip tersebut membangun keenam tabel final. `cities` dihubungkan ke negara Asia
+melalui `adm0_a3`; `airports` dipilih berdasarkan lokasi di dalam negara; `rivers`
+dan `lakes` dipilih jika geometri beririsan dengan negara Asia. Geometri sungai dan
+danau diperbaiki sebelum disimpan.
+
+## 3. Dump seluruh tabel final
+
+Setelah hasil validasi pada akhir skrip menunjukkan keenam tabel dan `invalid = 0`:
+
+```bash
+bash scripts/db_dump.sh
+```
+
+Perintah ini memperbarui `dumps/pdl.dump` dengan schema dan data semua tabel di
+schema `public` (countries, provinces, cities, airports, rivers, dan lakes).
+
+## 4. Alternatif: restore dari dump
 
 ```bash
 bash scripts/db_restore.sh dumps/pdl.dump
 ```
-
-<!-- TODO: lengkapi dengan cara load dari file per tabel di data/<tabel>/ setelah export -->
