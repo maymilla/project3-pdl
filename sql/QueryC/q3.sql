@@ -8,7 +8,7 @@ SELECT
 FROM countries c
 WHERE NOT EXISTS (
     SELECT 1
-    FROM raw.ne_10m_ocean o
+    FROM oceans o
     WHERE ST_Intersects(
         ST_Boundary(c.geom),
         o.geom
