@@ -1,190 +1,205 @@
-# IF4040 Project III – Basis Data Spasial (PostGIS)
+# IF4040 Project III: Spatial Database (PostGIS)
 
-Persebaran kota, sungai, dan karakteristik wilayah antarnegara di Asia.
-Sumber data: Natural Earth 1:10m.
+This repo models Asian geography in PostgreSQL with PostGIS: 59 countries, their provinces,
+cities, airports, rivers, lakes, and the surrounding ocean. You query it with SQL and view the
+results as maps in QGIS. All data comes from Natural Earth at 1:10m scale.
 
-## Struktur
+## Repository layout
 
 ```
-data/<tabel>/     hasil export data bersih (deliverable) + data/LOAD.md
-data/raw/         shapefile mentah hasil download (tidak di-commit)
-dumps/pdl.dump    dump database bersama
-sql/              01_schema.sql (DDL + cleansing), 02..05 query per kategori
-scripts/          download, import, dump, restore
-screenshots/      peta hasil query dari QGIS
-laporan/
+data/<table>/       cleaned data per table (deliverable), plus data/LOAD.md
+data/raw/           raw Natural Earth shapefiles (git ignores this folder)
+dumps/pdl.dump      shared database dump
+sql/01_schema.sql   DDL, loading, and cleansing for all seven tables
+sql/QueryA..E/      queries per category (A descriptive, B spatial, C mixed, D interactive, E spatial aggregate)
+scripts/            download, import, dump, restore
+skema_project3.drawio   ERD
+screenshots/        QGIS map exports
 ```
 
-## Skema
+## Schema
 
-Semua geometri disimpan di SRID 4326 (WGS 84, satuan derajat). Untuk jarak, luas,
-atau buffer dalam meter, cast ke `::geography`.
+Every geometry column uses SRID 4326 (WGS 84). Its unit is degrees, so cast to `::geography`
+whenever you measure distance, area, or buffers in meters.
 
 ```
 countries (country_code) ◄── FK ── provinces (country_code)
           (country_code) ◄── FK ── cities    (country_code)
 
-countries ┄┄ spasial ┄┄ airports  (ST_Covers)
-countries ┄┄ spasial ┄┄ rivers    (ST_Intersects)
-countries ┄┄ spasial ┄┄ lakes     (ST_Intersects)
-countries ┄┄ spasial ┄┄ oceans    (ST_Intersects)
+countries ┄┄ spatial ┄┄ airports  (ST_Covers)
+countries ┄┄ spatial ┄┄ rivers    (ST_Intersects)
+countries ┄┄ spatial ┄┄ lakes     (ST_Intersects)
+countries ┄┄ spatial ┄┄ oceans    (ST_Intersects)
 ```
 
-- **Kunci negara = `adm0_a3`, bukan `iso_a3`.** `iso_a3` bernilai `-99` untuk wilayah
-  sengketa, sedangkan `adm0_a3` selalu terisi dan juga ada di data provinsi dan kota.
-- **`airports`, `rivers`, `lakes`, `oceans` tidak punya FK.** Sumber bandara tidak punya kode negara,
-  dan satu sungai/danau/laut bisa bersinggungan dengan beberapa negara (many-to-many). Relasinya dihitung
-  secara spasial saat query.
-- **`cities` langsung ke `countries`, tidak lewat `provinces`.** Data kota tidak punya kunci
-  provinsi yang cocok. Menyimpan `province_id` sekaligus `country_code` juga menjadi
-  dependensi transitif (melanggar 3NF).
-- **Polygon dan line disimpan sebagai Multi\*.** Banyak negara/provinsi berupa kepulauan.
+Design decisions:
 
-Kolom *Sumber* = nama kolom di schema `raw` setelah import ogr2ogr (huruf kecil).
+- **Country key is `adm0_a3`.** Natural Earth fills `iso_a3` with `-99` for disputed areas.
+  `adm0_a3` always has a value and appears in the province and city data too.
+- **Four tables have no foreign key.** The airport source carries no country code. A river,
+  lake, or ocean can touch several countries, which makes the relation many-to-many. Queries
+  compute these relations with spatial predicates.
+- **`cities` points straight to `countries`.** The city data names its province only as free
+  text, and storing both `province_id` and `country_code` would break 3NF. When you need a
+  city's province, compute it with `ST_Within`.
+- **Polygons and lines use Multi types.** Many Asian countries are archipelagos. A plain
+  `Polygon` column rejects them.
+- **Russia stays out.** Natural Earth labels it `continent = 'Europe'`, and the filter follows
+  the source label.
+
+Column *Source* lists the field name in the `raw` schema after the ogr2ogr import.
 
 ### countries (`ne_10m_admin_0_countries`)
-| Atribut | Tipe | Constraint | Sumber | Keterangan |
+| Column | Type | Constraint | Source | Notes |
 |---|---|---|---|---|
-| country_id | SERIAL | PK | – | ID unik negara |
-| country_code | CHAR(3) | NOT NULL, UNIQUE | `adm0_a3` | Kode negara 3 huruf Natural Earth; dirujuk FK `provinces` dan `cities` |
-| iso_a3 | VARCHAR(3) | NULL | `iso_a3` | Kode ISO 3166-1 alpha-3; `-99` diubah menjadi NULL |
-| name | VARCHAR(100) | NOT NULL | `name` | Nama negara (bahasa Inggris) |
-| continent | VARCHAR(50) | NOT NULL | `continent` | Benua; dipakai untuk filter Asia |
-| subregion | VARCHAR(50) | NULL | `subregion` | Subwilayah PBB (South-Eastern Asia, dll.) |
-| pop_est | BIGINT | CHECK ≥ 0 | `pop_est` | Estimasi jumlah penduduk |
-| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometri | Batas wilayah negara |
+| country_id | SERIAL | PK | – | |
+| country_code | CHAR(3) | NOT NULL, UNIQUE | `adm0_a3` | Referenced by `provinces` and `cities` |
+| iso_a3 | VARCHAR(3) | NULL | `iso_a3` | `-99` becomes NULL |
+| name | VARCHAR(100) | NOT NULL | `name` | English name |
+| continent | VARCHAR(50) | NOT NULL | `continent` | Filter for Asia |
+| subregion | VARCHAR(50) | NULL | `subregion` | UN subregion |
+| pop_est | BIGINT | CHECK ≥ 0 | `pop_est` | Population estimate |
+| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometry | Country boundary |
 
 ### provinces (`ne_10m_admin_1_states_provinces`)
-| Atribut | Tipe | Constraint | Sumber | Keterangan |
+| Column | Type | Constraint | Source | Notes |
 |---|---|---|---|---|
-| province_id | SERIAL | PK | – | ID unik provinsi |
-| name | VARCHAR(150) | NOT NULL | `name` | Nama provinsi/negara bagian |
-| country_code | CHAR(3) | NOT NULL, FK → countries | `adm0_a3` | Negara tempat provinsi berada |
-| admin_type | VARCHAR(50) | NULL | `type_en` | Jenis wilayah (Province, State, Prefecture, ...) |
-| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometri | Batas wilayah provinsi |
+| province_id | SERIAL | PK | – | |
+| name | VARCHAR(150) | NOT NULL | `name` | |
+| country_code | CHAR(3) | NOT NULL, FK → countries | `adm0_a3` | |
+| admin_type | VARCHAR(50) | NULL | `type_en` | Province, State, Prefecture, ... |
+| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometry | Province boundary |
 
 ### cities (`ne_10m_populated_places`)
-| Atribut | Tipe | Constraint | Sumber | Keterangan |
+| Column | Type | Constraint | Source | Notes |
 |---|---|---|---|---|
-| city_id | SERIAL | PK | – | ID unik kota |
-| name | VARCHAR(150) | NOT NULL | `name` | Nama kota |
-| country_code | CHAR(3) | FK → countries | `adm0_a3` | Negara tempat kota berada |
-| population | BIGINT | CHECK ≥ 0 | `pop_max` | Estimasi jumlah penduduk |
-| geom | geometry(Point, 4326) | NOT NULL, GiST | geometri | Lokasi kota |
+| city_id | SERIAL | PK | – | |
+| name | VARCHAR(150) | NOT NULL | `name` | |
+| country_code | CHAR(3) | FK → countries | `adm0_a3` | |
+| population | BIGINT | CHECK ≥ 0 | `pop_max` | Negative source values become NULL |
+| geom | geometry(Point, 4326) | NOT NULL, GiST | geometry | |
 
 ### airports (`ne_10m_airports`)
-| Atribut | Tipe | Constraint | Sumber | Keterangan |
+| Column | Type | Constraint | Source | Notes |
 |---|---|---|---|---|
-| airport_id | SERIAL | PK | – | ID unik bandara |
-| name | VARCHAR(150) | NOT NULL | `name` | Nama bandara |
-| iata_code | VARCHAR(3) | NULL | `iata_code` | Kode IATA (misalnya CGK) |
-| geom | geometry(Point, 4326) | NOT NULL, GiST | geometri | Lokasi bandara; negara dicari dengan `ST_Covers` (titik di batas negara ikut terhitung) |
+| airport_id | SERIAL | PK | – | |
+| name | VARCHAR(150) | NOT NULL | `name` | |
+| iata_code | VARCHAR(3) | NULL | `iata_code` | 8 airports have none |
+| geom | geometry(Point, 4326) | NOT NULL, GiST | geometry | Country via `ST_Covers`, so coastline points count |
 
 ### rivers (`ne_10m_rivers_lake_centerlines`)
-| Atribut | Tipe | Constraint | Sumber | Keterangan |
+| Column | Type | Constraint | Source | Notes |
 |---|---|---|---|---|
-| river_id | SERIAL | PK | – | ID unik segmen sungai |
-| name | VARCHAR(150) | NULL | `name` | Nama sungai; ada segmen tanpa nama |
-| scalerank | SMALLINT | NULL | `scalerank` | Tingkat kepentingan kartografis (kecil = penting) |
-| geom | geometry(MultiLineString, 4326) | NOT NULL, GiST | geometri | Jalur sungai; negara dicari dengan `ST_Intersects` |
+| river_id | SERIAL | PK | – | One row per segment |
+| name | VARCHAR(150) | NULL | `name` | 26 segments have no name |
+| scalerank | SMALLINT | NULL | `scalerank` | Lower means more important |
+| geom | geometry(MultiLineString, 4326) | NOT NULL, GiST | geometry | Stored whole, not clipped at Asia's edge |
 
 ### lakes (`ne_10m_lakes`)
-| Atribut | Tipe | Constraint | Sumber | Keterangan |
+| Column | Type | Constraint | Source | Notes |
 |---|---|---|---|---|
-| lake_id | SERIAL | PK | – | ID unik danau |
-| name | VARCHAR(150) | NULL | `name` | Nama danau; boleh kosong |
-| scalerank | SMALLINT | NULL | `scalerank` | Tingkat kepentingan kartografis |
-| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometri | Area danau; negara dicari dengan `ST_Intersects` |
+| lake_id | SERIAL | PK | – | |
+| name | VARCHAR(150) | NULL | `name` | 87 lakes have no name |
+| scalerank | SMALLINT | NULL | `scalerank` | |
+| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometry | |
 
 ### oceans (`ne_10m_ocean`)
-| Atribut | Tipe | Constraint | Sumber | Keterangan |
+| Column | Type | Constraint | Source | Notes |
 |---|---|---|---|---|
-| ocean_id | SERIAL | PK | – | ID unik poligon laut |
-| scalerank | SMALLINT | NULL | `scalerank` | Tingkat kepentingan kartografis |
-| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometri | Area laut, dipotong ke radius 200 km dari daratan negara Asia; negara pesisir dicari dengan `ST_Intersects` |
+| ocean_id | SERIAL | PK | – | |
+| scalerank | SMALLINT | NULL | `scalerank` | |
+| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometry | World ocean clipped to 200 km around Asian land |
 
-## Setup database (sekali saja)
+Row counts after cleansing: 59 countries, 1,102 provinces, 1,794 cities, 219 airports,
+306 river segments, 238 lakes, 1 ocean polygon. No table holds an invalid geometry.
 
-Yang perlu di-install: **Docker Desktop**, **Git** (Git Bash untuk menjalankan script), dan **QGIS**.
+## Setup
+
+Install **Docker Desktop**, **Git** (Git Bash runs the scripts on Windows), and **QGIS**.
 
 ```bash
-git clone <url-repo> && cd project3-pdl
-docker compose up -d            # PostgreSQL 17 + PostGIS 3.5, port 5433
-bash scripts/db_restore.sh      # isi DB dari dumps/pdl.dump (DB pdl lokal ditimpa)
+git clone <repo-url> && cd project3-pdl
+docker compose up -d            # PostgreSQL 17 + PostGIS 3.5 on port 5433
+bash scripts/db_restore.sh      # loads dumps/pdl.dump and replaces your local pdl database
 ```
-
-Koneksi:
 
 | host | port | database | user | password |
 |---|---|---|---|---|
 | localhost | 5433 | pdl | postgres | postgres |
 
-Port 5433 (bukan 5432) supaya tidak bentrok dengan PostgreSQL yang mungkin sudah terinstall di laptop.
+The container listens on 5433 so it won't clash with a PostgreSQL install on 5432.
 
-## Mencoba akses database
+If Docker answers with `500 Internal Server Error`, restart Docker Desktop. If that fails, run
+`wsl --shutdown` in PowerShell and open Docker Desktop again.
 
-Masuk psql di dalam container (tidak perlu install psql):
+## Query the database
+
+Open psql inside the container. You don't need psql on your machine.
 
 ```bash
 docker compose exec db psql -U postgres -d pdl
 ```
 
-Lalu coba:
+```sql
+\dt                                  -- list tables
+\d countries                         -- table structure
+\i /sql/QueryB/q1.sql                -- run a query file (sql/ is mounted at /sql)
+SELECT ST_Area(geom::geography) / 1e6 AS area_km2 FROM countries WHERE country_code = 'IDN';
+\q
+```
+
+Run a file without entering psql:
+
+```bash
+MSYS_NO_PATHCONV=1 docker compose exec db psql -U postgres -d pdl -f /sql/QueryB/q1.sql
+```
+
+Git Bash rewrites `/sql/...` into `C:/Program Files/Git/sql/...` unless you set
+`MSYS_NO_PATHCONV=1`. PowerShell doesn't need it.
+
+Category B queries return only `geom`, which psql prints as hex. To check a result in the
+terminal, count the rows or select a name column for your own inspection:
 
 ```sql
-\dt                                   -- daftar tabel
-\d countries                          -- struktur tabel
-SELECT postgis_full_version();        -- cek PostGIS aktif
-SELECT country_code, name, subregion FROM countries ORDER BY name LIMIT 10;
-SELECT country_code, COUNT(*) FROM provinces GROUP BY 1 ORDER BY 2 DESC LIMIT 5;
--- contoh query spasial: luas Indonesia dalam km²
-SELECT ST_Area(geom::geography) / 1e6 AS luas_km2 FROM countries WHERE country_code = 'IDN';
-\q                                    -- keluar
+SELECT count(*) FROM ( <query> ) q;
 ```
 
-Bisa juga pakai DBeaver/pgAdmin dengan data koneksi di atas.
+## View results in QGIS
 
-## Membuka di QGIS
+1. **Connect.** In the Browser panel, right-click **PostgreSQL → New Connection**. Enter the
+   connection values above, click **Test Connection**, then **OK**.
+2. **Add base layers.** Open **PostgreSQL → pdl → public** and double-click `countries` or
+   `provinces`. Give them a light grey fill.
+3. **Run a query.** Open **Database → DB Manager**, select **PostgreSQL → pdl**, and press
+   **F2** for the SQL Window. Paste the query and click **Execute**.
+4. **Load it as a layer.** Tick **Load as new layer**, set the geometry column to `geom`, and
+   leave the unique-values box unticked. Name the layer and click **Load**.
+5. **Style it.** Drag the result above the base layer and give it a strong colour. For lines,
+   set the width to 0.8 or more.
+6. **Export.** Use **Project → Import/Export → Export Map to Image** and save to `screenshots/`.
 
-1. **Tambah koneksi.** Di panel *Browser*, klik kanan **PostgreSQL** → **New Connection...**
-   - Name: `pdl`, Host: `localhost`, Port: `5433`, Database: `pdl`
-   - Authentication → tab *Basic*: user `postgres`, password `postgres` (centang *Store*)
-   - Klik **Test Connection** → **OK**.
-2. **Tampilkan tabel.** Di *Browser* buka **PostgreSQL → pdl → public**, lalu
-   double-click (atau drag ke peta) `countries`, `provinces`, dll.
-3. **Tampilkan hasil query.** Menu **Database → DB Manager** → pilih *PostgreSQL → pdl* →
-   buka **SQL Window** (ikon kedua di toolbar, sebelah tombol refresh; atau menu
-   *Database → SQL Window*, atau tekan **F2**). Tulis query (misalnya dari `sql/02_query_B.sql`) → **Execute**.
-   Centang **Load as new layer**, isi *Geometry column* = `geom`. Kalau query hanya
-   mengembalikan `geom`, biarkan *Column(s) with unique values* tidak dicentang
-   (QGIS membuat ID baris sendiri). Beri nama layer, lalu klik **Load**.
-4. Supaya peta konteks terlihat, tambahkan `countries` sebagai layer dasar di bawah layer
-   hasil query, dan beri warna berbeda (klik kanan layer → *Properties → Symbology*).
-5. Screenshot peta: **Project → Import/Export → Export Map to Image...**, simpan ke `screenshots/`.
+After a restore, right-click **PostgreSQL → pdl → Refresh** so QGIS sees the new tables.
 
-Kalau koneksi gagal, pastikan container jalan: `docker compose ps` (status harus `healthy`).
+## Load data from scratch
 
-## Kalau mengisi tabel sendiri (alur load)
+You only need this to rebuild the database from the raw shapefiles.
 
 ```bash
-bash scripts/download_ne.sh ne_10m_populated_places ne_10m_airports   # -> data/raw/
-bash scripts/import_raw.sh  ne_10m_populated_places ne_10m_airports   # -> raw.<layer>
-docker compose exec db psql -U postgres -d pdl -c '\d raw.ne_10m_airports'  # cek nama kolom
-# tulis INSERT ... SELECT dari raw ke tabel final, lalu:
-bash scripts/db_dump.sh         # -> dumps/pdl.dump, commit & push
-```
-
-`01_schema.sql` meng-`DROP` lalu membuat ulang semua tabel final, jadi
-jalankan hanya kalau memang ingin membangun ulang dari raw:
-
-```bash
+bash scripts/download_ne.sh                       # all seven datasets into data/raw/
+bash scripts/import_raw.sh ne_10m_admin_0_countries ne_10m_admin_1_states_provinces \
+  ne_10m_populated_places ne_10m_airports ne_10m_rivers_lake_centerlines ne_10m_lakes ne_10m_ocean
 MSYS_NO_PATHCONV=1 docker compose exec db psql -U postgres -d pdl -f /sql/01_schema.sql
+bash scripts/db_dump.sh                           # writes dumps/pdl.dump
 ```
 
-Supaya tidak saling menimpa: satu orang (Orang 1) memegang dump "resmi".
-Yang lain kirim script INSERT-nya ke `sql/`, lalu dump dibuat ulang.
+`01_schema.sql` drops and recreates every final table, then loads `countries` first because
+the other six tables filter against it. One person owns the official dump. Send your INSERT
+changes to `sql/` and that person regenerates `dumps/pdl.dump`.
 
-## Dump & restore manual (tanpa script)
+The dump holds the `public` schema only. Queries must read the final tables, never `raw.*`,
+or they fail on a restored database.
+
+## Manual dump and restore
 
 ```bash
 # dump
@@ -196,3 +211,6 @@ docker compose exec -T db createdb -U postgres -T template0 pdl
 docker compose exec -T db psql     -U postgres -d pdl -c "CREATE EXTENSION postgis; CREATE SCHEMA raw;"
 docker compose exec -T db pg_restore -U postgres -d pdl --no-owner -n public < dumps/pdl.dump
 ```
+
+`-n public` on `pg_restore` skips the `CREATE SCHEMA public` statement, which would otherwise
+fail on the existing schema.
