@@ -24,15 +24,16 @@ atau buffer dalam meter, cast ke `::geography`.
 countries (country_code) ◄── FK ── provinces (country_code)
           (country_code) ◄── FK ── cities    (country_code)
 
-countries ┄┄ spasial ┄┄ airports  (ST_Contains)
+countries ┄┄ spasial ┄┄ airports  (ST_Covers)
 countries ┄┄ spasial ┄┄ rivers    (ST_Intersects)
 countries ┄┄ spasial ┄┄ lakes     (ST_Intersects)
+countries ┄┄ spasial ┄┄ oceans    (ST_Intersects)
 ```
 
 - **Kunci negara = `adm0_a3`, bukan `iso_a3`.** `iso_a3` bernilai `-99` untuk wilayah
   sengketa, sedangkan `adm0_a3` selalu terisi dan juga ada di data provinsi dan kota.
-- **`airports`, `rivers`, `lakes` tidak punya FK.** Sumber bandara tidak punya kode negara,
-  dan satu sungai/danau bisa melewati beberapa negara (many-to-many). Relasinya dihitung
+- **`airports`, `rivers`, `lakes`, `oceans` tidak punya FK.** Sumber bandara tidak punya kode negara,
+  dan satu sungai/danau/laut bisa bersinggungan dengan beberapa negara (many-to-many). Relasinya dihitung
   secara spasial saat query.
 - **`cities` langsung ke `countries`, tidak lewat `provinces`.** Data kota tidak punya kunci
   provinsi yang cocok. Menyimpan `province_id` sekaligus `country_code` juga menjadi
@@ -77,7 +78,7 @@ Kolom *Sumber* = nama kolom di schema `raw` setelah import ogr2ogr (huruf kecil)
 | airport_id | SERIAL | PK | – | ID unik bandara |
 | name | VARCHAR(150) | NOT NULL | `name` | Nama bandara |
 | iata_code | VARCHAR(3) | NULL | `iata_code` | Kode IATA (misalnya CGK) |
-| geom | geometry(Point, 4326) | NOT NULL, GiST | geometri | Lokasi bandara; negara dicari dengan `ST_Contains` |
+| geom | geometry(Point, 4326) | NOT NULL, GiST | geometri | Lokasi bandara; negara dicari dengan `ST_Covers` (titik di batas negara ikut terhitung) |
 
 ### rivers (`ne_10m_rivers_lake_centerlines`)
 | Atribut | Tipe | Constraint | Sumber | Keterangan |
@@ -94,6 +95,13 @@ Kolom *Sumber* = nama kolom di schema `raw` setelah import ogr2ogr (huruf kecil)
 | name | VARCHAR(150) | NULL | `name` | Nama danau; boleh kosong |
 | scalerank | SMALLINT | NULL | `scalerank` | Tingkat kepentingan kartografis |
 | geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometri | Area danau; negara dicari dengan `ST_Intersects` |
+
+### oceans (`ne_10m_ocean`)
+| Atribut | Tipe | Constraint | Sumber | Keterangan |
+|---|---|---|---|---|
+| ocean_id | SERIAL | PK | – | ID unik poligon laut |
+| scalerank | SMALLINT | NULL | `scalerank` | Tingkat kepentingan kartografis |
+| geom | geometry(MultiPolygon, 4326) | NOT NULL, GiST | geometri | Area laut, dipotong ke radius 200 km dari daratan negara Asia; negara pesisir dicari dengan `ST_Intersects` |
 
 ## Setup database (sekali saja)
 
@@ -144,8 +152,9 @@ Bisa juga pakai DBeaver/pgAdmin dengan data koneksi di atas.
    - Klik **Test Connection** → **OK**.
 2. **Tampilkan tabel.** Di *Browser* buka **PostgreSQL → pdl → public**, lalu
    double-click (atau drag ke peta) `countries`, `provinces`, dll.
-3. **Tampilkan hasil query.** Menu **Database → DB Manager** → pilih *PostGIS → pdl* →
-   klik ikon **SQL Window**. Tulis query (misalnya dari `sql/02_query_B.sql`) → **Execute**.
+3. **Tampilkan hasil query.** Menu **Database → DB Manager** → pilih *PostgreSQL → pdl* →
+   buka **SQL Window** (ikon kedua di toolbar, sebelah tombol refresh; atau menu
+   *Database → SQL Window*, atau tekan **F2**). Tulis query (misalnya dari `sql/02_query_B.sql`) → **Execute**.
    Centang **Load as new layer**, isi *Geometry column* = `geom`. Kalau query hanya
    mengembalikan `geom`, biarkan *Column(s) with unique values* tidak dicentang
    (QGIS membuat ID baris sendiri). Beri nama layer, lalu klik **Load**.
