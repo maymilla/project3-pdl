@@ -5,19 +5,15 @@ SELECT
     c.name AS country_name,
     c.continent,
     c.pop_est AS estimated_population,
-
     ROUND(
         (ST_Area(c.geom::geography) / 1000000.0)::numeric,
         2
     ) AS area_km2,
-
     (
         SELECT COUNT(*)
         FROM public.provinces p
         WHERE p.country_code = c.country_code
     ) AS total_provinces,
-
     c.geom
-
 FROM public.countries c
 WHERE c.continent = 'Asia';
